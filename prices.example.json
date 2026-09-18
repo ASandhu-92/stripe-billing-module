@@ -1,0 +1,27 @@
+{
+  "cheatsheet": {
+    "name": "AI Tools Cheat Sheet",
+    "product_id": "prod_EXAMPLE_cheatsheet",
+    "price_id": "price_EXAMPLE_cheatsheet",
+    "mode": "payment",
+    "amount_usd": 9.0,
+    "interval": null
+  },
+  "weekly": {
+    "name": "Signal Weekly",
+    "product_id": "prod_EXAMPLE_weekly",
+    "price_id": "price_EXAMPLE_weekly",
+    "mode": "subscription",
+    "amount_usd": 5.0,
+    "interval": "month"
+  },
+  "annual": {
+    "name": "Signal Weekly Annual",
+    "product_id": "prod_EXAMPLE_annual",
+    "price_id": "price_EXAMPLE_annual",
+    "mode": "subscription",
+    "amount_usd": 40.0,
+    "interval": "year"
+  },
+  "_portal_configuration": "bpc_EXAMPLE"
+}

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.db
+*.db-journal
+.env
+.pytest_cache/
+prices.json
+secrets/
+*.enc.env
