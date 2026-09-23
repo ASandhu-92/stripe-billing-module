@@ -4,7 +4,7 @@ Every case below was run against Stripe test mode with the app in `app.py` recei
 through `stripe listen`. The Stripe column is what the Dashboard or API showed. The DB column is the
 matching row in our `entitlements` table (`email, product, status, source_event_id, subscription_id`).
 Test customers are `*@example.test`. Amounts are USD cents. Card `4242 4242 4242 4242` unless stated.
-Object ids are test-mode ids from a sandbox that has since been reset; they resolve to nothing.
+Object ids are test-mode ids from a Stripe sandbox. They only exist in that test account and carry no customer data.
 
 Not every case went cleanly on the first try. Where the first attempt exposed a bug in the app,
 the case says so, because that is the point of running them.
