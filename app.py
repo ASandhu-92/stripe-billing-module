@@ -85,14 +85,14 @@ async def webhook(request: Request):
 
     conn = db()
     try:
-        if not models.claim_event(conn, event["id"], event["type"]):
-            return {"received": True, "duplicate": True, "event": event["id"]}
+        prices = load_prices()
         try:
-            result = handle(conn, event, load_prices())
-        except Exception as exc:  # let Stripe retry; forget the id so the retry is processed
-            models.release_event(conn, event["id"])
+            result = models.process_event(conn, event["id"], event["type"],
+                                          lambda c: handle(c, event, prices))
+        except models.Duplicate:
+            return {"received": True, "duplicate": True, "event": event["id"]}
+        except Exception as exc:  # rolled back, event id included: Stripe's retry is processed
             return JSONResponse(status_code=500, content={"error": str(exc), "event": event["id"]})
-        models.finish_event(conn, event["id"])
         return {"received": True, "event": event["id"], "type": event["type"], **result}
     finally:
         conn.close()

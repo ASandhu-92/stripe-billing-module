@@ -1,9 +1,12 @@
 """SQLite storage for the billing module.
 
 Three tables carry the whole state:
-  events        every Stripe event id we have accepted, so a redelivery is a no-op
+  events        every Stripe event id we have processed, so a redelivery is a no-op
   entitlements  what a customer is allowed to use, per product, and which event set it
   customers     Stripe customer id -> email, filled from events that carry an email
+
+One event is one transaction (process_event): the event id and every write its handler makes are
+committed together or not at all. The write helpers below do not commit on their own.
 """
 import os
 import sqlite3
@@ -15,7 +18,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     id          TEXT PRIMARY KEY,
     type        TEXT NOT NULL,
-    status      TEXT NOT NULL,           -- processing | done
+    status      TEXT NOT NULL,           -- done (older databases may hold 'processing')
     received_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS entitlements (
@@ -42,28 +45,39 @@ def connect(path: str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(path or DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    # The previous version committed a 'processing' row before the work; one left behind by a
+    # crash would block the event forever. This version never writes one, so any found is stale.
+    conn.execute("DELETE FROM events WHERE status = 'processing'")
+    conn.commit()
     return conn
 
 
-def claim_event(conn, event_id: str, event_type: str) -> bool:
-    """Record the event id before doing any work. False means we already have it."""
-    cur = conn.execute(
-        "INSERT OR IGNORE INTO events (id, type, status, received_at) VALUES (?, ?, 'processing', ?)",
-        (event_id, event_type, now_iso()),
-    )
+class Duplicate(Exception):
+    """The event id was already processed."""
+
+
+def process_event(conn, event_id: str, event_type: str, work):
+    """Record the event id and run work(conn) in one transaction.
+
+    Commit only if work returns. If it raises, or the process dies before the commit, nothing is
+    kept, not even the event id, so Stripe's next delivery is processed from the start. A second
+    delivery of a processed event raises Duplicate and writes nothing. Two deliveries at once are
+    serialized by SQLite's write lock (BEGIN IMMEDIATE), so only one of them does the work.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO events (id, type, status, received_at) VALUES (?, ?, 'done', ?)",
+            (event_id, event_type, now_iso()),
+        )
+        if cur.rowcount != 1:
+            raise Duplicate(event_id)
+        result = work(conn)
+    except BaseException:
+        conn.rollback()
+        raise
     conn.commit()
-    return cur.rowcount == 1
-
-
-def finish_event(conn, event_id: str) -> None:
-    conn.execute("UPDATE events SET status = 'done' WHERE id = ?", (event_id,))
-    conn.commit()
-
-
-def release_event(conn, event_id: str) -> None:
-    """Processing failed: forget the id so Stripe's retry gets a fresh attempt."""
-    conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
-    conn.commit()
+    return result
 
 
 def set_entitlement(conn, email: str, product: str, status: str, event_id: str,
@@ -78,7 +92,6 @@ def set_entitlement(conn, email: str, product: str, status: str, event_id: str,
              updated_at = excluded.updated_at""",
         (email.lower(), product, status, event_id, subscription_id, now_iso()),
     )
-    conn.commit()
 
 
 def supersede_subscription_products(conn, subscription_id: str, keep_product: str, event_id: str) -> list[str]:
@@ -109,7 +122,6 @@ def remember_customer(conn, customer_id: str | None, email: str | None) -> None:
             "INSERT OR REPLACE INTO customers (customer_id, email) VALUES (?, ?)",
             (customer_id, email.lower()),
         )
-        conn.commit()
 
 
 def email_for_customer(conn, customer_id: str) -> str | None:

@@ -11,19 +11,21 @@ cancelling in a different way than the API, a partial refund firing the same eve
 and a receiver that was down when the payment happened. Each of those was run against the sandbox
 and written up.
 
-Read `CASES.md` for what was run and what Stripe and the database showed for each case,
-`POSTMORTEM-paid-but-no-access.md` for the failure that was staged on purpose, and
-`RUNBOOK-billing-support.md` for how to answer the five common billing tickets against this data.
+**Start here:** [`CASES.md`](CASES.md), ten cases run against the sandbox with what Stripe and the
+database showed for each. Then [`POSTMORTEM-paid-but-no-access.md`](POSTMORTEM-paid-but-no-access.md)
+for the failure that was staged on purpose, and
+[`RUNBOOK-billing-support.md`](RUNBOOK-billing-support.md) for how to answer the five common billing
+tickets against this data.
 
 ## What it does
 
 | Route | Purpose |
 |---|---|
 | `POST /checkout` `{email, product}` | Creates a Checkout Session in `payment` or `subscription` mode and returns its URL |
-| `POST /webhook` | Verifies the Stripe signature, records `event.id` before doing anything, returns 200 on a repeat without re-applying, handles the six events below |
+| `POST /webhook` | Verifies the Stripe signature, then records `event.id` and applies the event in one database transaction; a repeat returns 200 without re-applying. Handles the six events below |
 | `GET /portal?email=` | Creates a customer portal session (cancel, change plan, update card) |
 | `GET /support/{email}` | Customer, subscriptions, last 5 invoices, last charge, our entitlement rows, and `mismatches` when Stripe and the database disagree |
-| `GET /events` | The event ids we have accepted |
+| `GET /events` | The event ids we have processed |
 
 Events handled: `checkout.session.completed`, `invoice.paid`, `invoice.payment_failed`,
 `customer.subscription.updated`, `customer.subscription.deleted`, `charge.refunded`.
@@ -44,7 +46,7 @@ reconcile.py         lists every Stripe vs database mismatch; exit code = number
 lab_cases.py         drives the API side of the cases (plan change, cancel, refund, test clocks)
 run.sh, listen.sh    start the app and `stripe listen` with keys from an encrypted env file
 prices.example.json  the shape of prices.json, with placeholder ids; the tests use it
-tests/               pytest, 16 tests, no network
+tests/               pytest, 21 tests, no network
 ```
 
 ## Run it
@@ -69,15 +71,23 @@ The app refuses a key that does not start with `sk_test_`.
 
 - No live mode. There is no code path for it and the key check blocks it.
 - No UI. Checkout and the portal are Stripe's hosted pages; everything else is JSON.
-- No retries of its own. A failed handler returns 500 and forgets the event id, so Stripe's
-  retry gets a clean attempt. That is deliberate; see the postmortem for why a CLI listener is
-  not the same as a Dashboard endpoint here.
+- No retries of its own. The event id and every write the handler makes are committed together.
+  If the handler fails, or the process is killed before the commit, nothing is kept, not even the
+  event id, and Stripe's retry gets a clean attempt. `tests/test_recovery.py` kills a real process
+  part way through an event to check this. See the postmortem for why a CLI listener is not the
+  same as a Dashboard endpoint for retries.
 - No authentication on `/portal`, `/support` and `/events`. They are meant to be called by the
   product's own logged-in backend on localhost, never exposed to the internet as they are.
 - No success-page fallback yet. Access comes from the webhook only. The postmortem lists this
   as the first thing to add.
 
 ## Things learned the hard way
+
+- The first version saved the event id first and committed each write on its own. A process killed
+  between the two would leave the id marked as seen, so every retry was treated as a duplicate and
+  the customer never got access. A code review found it on 2026-09-29, not a test; the fix makes
+  one event one transaction, and a database from the old version has its stale rows cleared on
+  start.
 
 - The Stripe CLI login and the app's secret key must point at the same account. A CLI paired with
   the parent account while the app uses a sandbox key gives a healthy-looking listener that never

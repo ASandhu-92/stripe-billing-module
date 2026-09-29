@@ -1,0 +1,8 @@
+# Versions the offline tests were last run with (2026-09-29). CI installs requirements.txt with these.
+stripe==15.6.1
+fastapi==0.142.0
+starlette==1.7.0
+pydantic==2.13.5
+uvicorn==0.54.0
+pytest==9.1.1
+httpx==0.28.1
